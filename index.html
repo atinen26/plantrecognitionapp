@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Plant Species Recognition</title>
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <style>
+        #content {
+            display: flex;
+            justify-content: space-around;
+            align-items: flex-start;
+        }
+        #webcam-section, #upload-section {
+            flex: 1;
+            text-align: center;
+            position: relative;
+        }
+        #map-section {
+            flex: 1;
+            text-align: center;
+        }
+        #map {
+            height: 400px;
+            width: 100%;
+        }
+        #label-container {
+            margin-top: 10px;
+            font-size: 18px;
+            font-weight: bold;
+        }
+        #scan-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 255, 0, 0.3);
+            display: none;
+            border: 2px solid green;
+        }
+        .scanning {
+            display: block;
+            animation: scan-animation 1s infinite;
+        }
+        .result {
+            font-size: 24px;
+            color: green;
+            font-weight: bold;
+        }
+        #restart-button-container {
+            display: flex;
+            justify-content: center;
+            margin-top: 20px;
+        }
+        #restart-button {
+            display: none;
+        }
+        #uploaded-image {
+            display: none;
+            margin-top: 20px;
+        }
+        #webcam-section, #upload-section {
+            display: none; /* Hide both by default */
+        }
+
+        /* Center the uploaded image */
+        #upload-section img {
+            display: block;
+            margin: 0 auto; /* Center the image */
+        }
+
+        @keyframes scan-animation {
+            0% { background-color: rgba(0, 255, 0, 0.1); }
+            50% { background-color: rgba(0, 255, 0, 0.5); }
+            100% { background-color: rgba(0, 255, 0, 0.1); }
+        }
+        #filter-container {
+            margin-bottom: 20px;
+        }
+        #details {
+            margin-top: 20px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container mt-5">
+        <h1 class="mb-4 text-center">Plant Species Recognition</h1>
+
+        <!-- Dropdown to select Webcam or Picture Upload -->
+        <div class="text-center mb-4">
+            <label for="scanMethod" class="form-label">Choose Scan Method:</label>
+            <select id="scanMethod" class="form-select w-50 mx-auto" onchange="toggleScanMethod()">
+                <option value="">Select Method</option>
+                <option value="webcam">Use Webcam</option>
+                <option value="upload">Upload Picture</option>
+            </select>
+        </div>
+
+        <div id="content">
+            <!-- Webcam section -->
+            <div id="webcam-section">
+                <h4>Use Webcam for Scanning</h4>
+                <div id="webcam-container"></div>
+                <div id="scan-overlay"></div>
+                <div id="label-container" class="mt-2">Class: <span id="class-label">Scanning...</span></div>
+		<div id="details"></div> <!-- Display class, description, and coordinates -->
+                <div id="restart-button-container">
+                    <button id="restart-button" class="btn btn-primary" onclick="restartScan()">Restart</button>
+                </div>
+            </div>
+
+            <!-- Image upload section -->
+            <div id="upload-section">
+                <h4>Upload an Image</h4>
+                <input type="file" id="image-upload" class="form-control mb-3" accept="image/*">
+                <img id="uploaded-image" src="#" alt="Uploaded Image" class="border" style="display: none;">
+                <canvas id="canvas" style="display:none;"></canvas> <!-- Canvas for resizing image -->
+                <div id="upload-details"></div>
+            </div>
+
+            <!-- Map section -->
+            <div id="map-section">
+                <h4>Location</h4>
+
+        <!-- Dropdown for class filter -->
+        <div id="filter-container" class="text-center mb-4">
+            <label for="classFilter" class="form-label">Filter by Plant Class:</label>
+            <select id="classFilter" class="form-select w-50 mx-auto" onchange="filterMarkers()">
+                <option value="All">All</option>
+                <option value="Black Gold">Black Gold</option>
+                <option value="Black Prince Rubber Tree">Black Prince Rubber Tree</option>
+                <option value="Chameleon ZZ Plant">Chameleon ZZ Plant</option>
+                <option value="Donkey's Tail">Donkey's Tail</option>
+                <option value="Dwarf Kamuning Plant">Dwarf Kamuning Plant</option>
+                <option value="Fiddle Leaf Fig">Fiddle Leaf Fig</option>
+                <option value="Silver Lady">Silver Lady</option>
+                <option value="Tineke Rubber Tree">Tineke Rubber Tree</option>
+                <option value="Variegated Rhapis">Variegated Rhapis</option>
+                <option value="ZZ Raven">ZZ Raven</option>
+            </select>
+
+                <div id="map"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- JavaScript -->
+    <script type="text/javascript">
+        const URL = "./model/";
+        let model, webcam, labelContainer, maxPredictions, scanOverlay;
+        let map, markerLayer = L.layerGroup();  // Layer group for markers
+        let allLocations = [];  // Store all fetched locations
+        let webcamInitialized = false;  // Flag to track if webcam is already initialized
+        let latitude = null, longitude = null;  // For storing location coordinates
+
+        // Plant descriptions for each class
+        const plantDescriptions = {
+            "Black Gold": "Black Gold is known for its dark green and yellow variegated leaves.",
+            "Black Prince Rubber Tree": "The Black Prince Rubber Tree is a popular indoor plant with dark, shiny leaves.",
+            "Chameleon ZZ Plant": "The Chameleon ZZ Plant changes its color from green to yellow under certain conditions.",
+            "Donkey's Tail": "Donkey's Tail is a trailing succulent plant with small, plump leaves.",
+            "Dwarf Kamuning Plant": "Dwarf Kamuning is a small evergreen shrub with fragrant white flowers.",
+            "Fiddle Leaf Fig": "The Fiddle Leaf Fig is a large indoor plant with large, violin-shaped leaves.",
+            "Silver Lady": "Silver Lady is a compact plant with silver-striped leaves.",
+            "Tineke Rubber Tree": "The Tineke Rubber Tree has attractive variegated leaves of green, white, and pink.",
+            "Variegated Rhapis": "Variegated Rhapis is a slow-growing palm with variegated green and yellow leaves.",
+            "ZZ Raven": "ZZ Raven is known for its glossy, dark purple-black foliage."
+        };
+
+        // Load the image model and setup the webcam or map
+        async function initModel() {
+            const modelURL = URL + "model.json";
+            const metadataURL = URL + "metadata.json";
+
+            model = await tmImage.load(modelURL, metadataURL);
+            maxPredictions = model.getTotalClasses();
+        }
+
+        // Initialize the webcam (only once)
+        async function initWebcam() {
+            if (!webcamInitialized) {  // Only initialize if not already initialized
+                const flip = true;
+                webcam = new tmImage.Webcam(200, 200, flip); // width, height, flip
+                await webcam.setup();
+                await webcam.play();
+                document.getElementById("webcam-container").appendChild(webcam.canvas);
+
+                labelContainer = document.getElementById("class-label");
+                scanOverlay = document.getElementById("scan-overlay");
+                window.requestAnimationFrame(loop);
+
+                webcamInitialized = true;  // Mark webcam as initialized
+            }
+        }
+
+        // Continuously scan the webcam feed
+        async function loop() {
+            if (!scanOverlay.classList.contains('stopped')) {
+                webcam.update();  // update the webcam frame
+                await predict();
+                window.requestAnimationFrame(loop);
+            }
+        }
+
+        // Predict from webcam and capture data
+        async function predict() {
+            const prediction = await model.predict(webcam.canvas);
+            const bestPrediction = prediction.reduce((max, p) => (p.probability > max.probability ? p : max), prediction[0]);
+
+            if (bestPrediction.probability >= 0.9975) {
+                scanOverlay.classList.remove('scanning');
+                scanOverlay.classList.add('stopped');
+                labelContainer.innerHTML = `<span class="result">${bestPrediction.className}</span>`;
+
+                // Capture the image from the webcam
+                const image = webcam.canvas.toDataURL("image/jpeg");  // Capture the image in base64
+
+                // Get current timestamp and format it
+                const now = new Date();
+                const timestamp = now.toLocaleDateString('en-US', {
+                    month: '2-digit',
+                    day: '2-digit',
+                    year: 'numeric'
+                }) + ", " + now.toLocaleTimeString('en-US', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    hour12: true
+                });
+
+                // Display scan details (class name, description, coordinates)
+                displayDetails(bestPrediction.className, timestamp, latitude, longitude, "details");
+
+                // Ensure we have the latest location coordinates before saving
+                if (latitude !== null && longitude !== null) {
+                    // Save the scan data to MongoDB
+                    saveScanData(bestPrediction.className, timestamp, latitude, longitude, image);
+                } else {
+                    alert("Unable to capture location. Please allow location access.");
+                }
+
+                // Get the city from coordinates
+                getCity(latitude, longitude);
+
+                // Show the restart button
+                document.getElementById("restart-button").style.display = "block";
+
+        // Hide the label container after scanning
+        document.getElementById("label-container").style.display = "none";  // Hide the class label container
+            }
+        }
+
+        // Display class name, description, date & time, coordinates
+        function displayDetails(className, timestamp, latitude, longitude, sectionId) {
+            const details = document.getElementById(sectionId);
+            const description = plantDescriptions[className] || "Description not available.";
+            details.innerHTML = `
+                <p><strong>Plant Name:</strong> ${className}</p>
+                <p><strong>Description:</strong> ${description}</p>
+                <p><strong>Date & Time:</strong> ${timestamp}</p>
+                <p><strong>Coordinates:</strong> ${latitude}, ${longitude}</p>
+            `;
+        }
+
+        // Get the city from coordinates using Nominatim
+        async function getCity(latitude, longitude) {
+            const url = `https://nominatim.openstreetmap.org/reverse?lat=${latitude}&lon=${longitude}&format=json`;
+            try {
+                const response = await fetch(url);
+                const data = await response.json();
+                const city = data.address.city || data.address.town || data.address.village;
+
+                // Display city on the map
+                if (city) {
+                    const map = L.map('map').setView([latitude, longitude], 13);
+                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                    }).addTo(map);
+
+                    L.marker([latitude, longitude]).addTo(map)
+                        .bindPopup(`You are in: ${city}`)
+                        .openPopup();
+                }
+            } catch (error) {
+                console.error("Error fetching city:", error);
+            }
+        }
+
+// Change the URLs for saving scan data and fetching plant locations
+const saveScanURL = 'http://localhost:3000/save-scan';
+const fetchLocationsURL = 'http://localhost:3000/plant-locations';
+
+// Save the scanned data to MongoDB via a backend API
+async function saveScanData(className, timestamp, latitude, longitude, image) {
+    try {
+        const scanData = { className, timestamp, latitude, longitude, image };
+        
+        // Use the correct port (3000) for your backend
+        const response = await fetch(saveScanURL, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(scanData)
+        });
+
+        if (!response.ok) {
+            throw new Error("Failed to save scan data");
+        }
+
+        console.log("Scan data saved successfully:", scanData);
+    } catch (error) {
+        console.error("Error saving scan data:", error);
+    }
+}
+
+        // Resize uploaded image to match webcam photo size
+        function resizeImage(img, width = 200, height = 200) {
+            const canvas = document.getElementById('canvas');
+            const ctx = canvas.getContext('2d');
+            canvas.width = width;
+            canvas.height = height;
+
+            // Draw resized image on the canvas
+            ctx.drawImage(img, 0, 0, width, height);
+
+            // Convert the resized image to base64 (JPEG)
+            return canvas.toDataURL('image/jpeg');
+        }
+
+        // Handle image upload and display the image
+        document.getElementById("image-upload").addEventListener("change", function () {
+            const imageUpload = document.getElementById("image-upload").files[0];
+            if (!imageUpload) return;
+
+            const reader = new FileReader();
+            reader.onload = function (e) {
+                const img = new Image();
+                img.src = e.target.result;
+                img.onload = function () {
+                    // Use the original image for prediction
+                    const originalImage = e.target.result;
+
+                    // Resize the image and show the resized version
+                    const resizedImage = resizeImage(img);
+                    document.getElementById("uploaded-image").src = resizedImage;
+                    document.getElementById("uploaded-image").style.display = "block";
+
+                    // After the original image is passed to the prediction model
+                    predictImage(originalImage);
+		};
+            };
+            reader.readAsDataURL(imageUpload);
+        });
+
+        // Handle image upload, resize, predict, and display in upload section
+        function predictImage(originalImage) {
+            const img = new Image();
+            img.src = originalImage;
+            img.onload = async function () {
+                // Resize the image before prediction (for prediction only)
+                const resizedImage = resizeImage(img);  // Resized image used only for prediction
+
+                // Convert resized image back to an Image object for prediction
+                const resizedImg = new Image();
+                resizedImg.src = resizedImage;
+                resizedImg.onload = async function () {
+                    const predictions = await model.predict(resizedImg);
+                    const bestPrediction = predictions.reduce((max, p) => (p.probability > max.probability ? p : max), predictions[0]);
+
+                    const now = new Date();
+                    const timestamp = now.toLocaleDateString('en-US', {
+                        month: '2-digit',
+                        day: '2-digit',
+                        year: 'numeric'
+                    }) + ", " + now.toLocaleTimeString('en-US', {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        hour12: true
+                    });
+
+                    // Display prediction details in upload section
+                    displayDetails(bestPrediction.className, timestamp, latitude, longitude, "upload-details");
+
+                    // Save the resized image and prediction details
+                    if (latitude && longitude) {
+                        saveScanData(bestPrediction.className, timestamp, latitude, longitude, resizedImage);
+                    } else {
+                        alert("Unable to capture location. Please allow location access.");
+                    }
+                };
+            };
+        }
+
+        // Add markers to the map for the given plant locations
+        function addMarkers(locations) {
+            markerLayer.clearLayers();  // Clear the existing markers
+            locations.forEach(location => {
+                const { className, latitude, longitude, timestamp, image } = location;
+
+                // Create popup content with className and image
+                const popupContent = `
+                    <strong>${className}</strong><br>
+		    Date and Time taken: ${timestamp}<br>
+                    Location: ${latitude}, ${longitude}<br>
+                    <img src="${image}" alt="${className}" style="width:100px;height:100px;">
+                `;
+
+                const marker = L.marker([latitude, longitude]).bindPopup(popupContent);
+                markerLayer.addLayer(marker);  // Add marker to layer group
+            });
+
+            markerLayer.addTo(map);  // Add all markers to the map
+        }
+
+        // Filter markers based on class selection
+        function filterMarkers() {
+            const selectedClass = document.getElementById("classFilter").value;
+
+            // If "All" is selected, show all markers
+            if (selectedClass === "All") {
+                addMarkers(allLocations);
+            } else {
+                const filteredLocations = allLocations.filter(location => location.className === selectedClass);
+                addMarkers(filteredLocations);
+            }
+        }
+
+// Fetch plant locations from MongoDB and add them to the map
+async function fetchPlantLocations() {
+    try {
+        // Use the correct port (3000) for your backend
+        const response = await fetch(fetchLocationsURL);
+        const locations = await response.json();
+        console.log("Fetched plant locations:", locations);  // Debugging: log the locations
+        allLocations = locations;  // Store the fetched locations
+            // Display location details (Class name, Coordinates, City, Description)
+            const locationDetails = document.getElementById('location-details');
+            locations.forEach(location => {
+                const details = `
+                    <div>
+                        <h4>${location.className}</h4>
+                        <p><strong>Description:</strong> Brief description about ${location.className}.</p>
+                        <p><strong>Coordinates:</strong> ${location.latitude}, ${location.longitude}</p>
+                        <p><strong>City:</strong> ${location.city}</p>
+                    </div>
+                `;
+                locationDetails.innerHTML += details;
+            });
+    } catch (error) {
+        console.error("Error fetching plant locations:", error);
+    }
+}
+
+        // Toggle between Webcam and Image Upload
+        function toggleScanMethod() {
+            const selectedMethod = document.getElementById("scanMethod").value;
+
+            // Hide both sections first
+            document.getElementById("webcam-section").style.display = "none";
+            document.getElementById("upload-section").style.display = "none";
+
+            // Show the appropriate section based on the selected method
+            if (selectedMethod === "webcam") {
+                document.getElementById("webcam-section").style.display = "block";
+                initWebcam();  // Only initialize webcam if it's not already initialized
+            } else if (selectedMethod === "upload") {
+                document.getElementById("upload-section").style.display = "block";
+            }
+        }
+
+        // Restart scanning process
+        function restartScan() {
+            scanOverlay.classList.remove('stopped');
+            document.getElementById("class-label").innerHTML = "Scanning...";
+            document.getElementById("restart-button").style.display = "none";
+            window.requestAnimationFrame(loop);
+        }
+
+// Initialize the map with the user's location
+function getLocation() {
+    if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(position => {
+            latitude = position.coords.latitude;
+            longitude = position.coords.longitude;
+
+            // Initialize the map with the current coordinates
+            initMap(latitude, longitude);
+        }, showError, {
+            enableHighAccuracy: true,  // Ensure higher accuracy
+            timeout: 5000,
+            maximumAge: 0
+	});
+    } else {
+        document.getElementById("map").innerHTML = "Geolocation is not supported by this browser.";
+    }
+}
+
+        // Initialize the map and fetch plant locations
+        function initMap(latitude, longitude) {
+            map = L.map('map').setView([latitude, longitude], 13);
+
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            }).addTo(map);
+
+            L.marker([latitude, longitude]).addTo(map)
+	        .bindPopup(`You are here: ${latitude}, ${longitude}`)
+                .openPopup();
+
+    // Add the layer group to the map for storing plant markers
+    markerLayer.addTo(map);
+
+            fetchPlantLocations();  // Fetch plant locations
+        }
+
+        function showError(error) {
+            const map = document.getElementById("map");
+            console.error("Geolocation error:", error);
+            alert("Error fetching location. Please allow location access and try again.");
+            switch (error.code) {
+                case error.PERMISSION_DENIED:
+                    map.innerHTML = "User denied the request for Geolocation.";
+                    break;
+                case error.POSITION_UNAVAILABLE:
+                    map.innerHTML = "Location information is unavailable.";
+                    break;
+                case error.TIMEOUT:
+                    map.innerHTML = "The request to get user location timed out.";
+                    break;
+                case error.UNKNOWN_ERROR:
+                    map.innerHTML = "An unknown error occurred.";
+                    break;
+            }
+        }
+
+        // Event listener for Restart button
+        document.getElementById('restart-button').addEventListener('click', () => {
+            // Clear the displayed details
+            document.getElementById('details').innerHTML = '';
+            labelContainer.innerHTML = 'Scanning...';
+
+            // Hide the restart button
+            document.getElementById('restart-button').style.display = 'none';
+
+            // Restart the scanning process
+            window.requestAnimationFrame(loop);
+        });
+
+        // Initialize on page load
+        window.onload = () => {
+            initModel();  // Load the model once
+            getLocation();  // Initialize the map and fetch locations
+        };
+    </script>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+</body>
+</html>

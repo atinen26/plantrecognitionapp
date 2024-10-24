@@ -1,0 +1,5 @@
+terminal > python3 -m http.server
+cmd node.js server (mongodb), place in system32 > node server.js
+
+--
+mongodb+srv://atinen26:eyeshield21@cluster0.uvcik.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0
