@@ -438,6 +438,9 @@ async function fetchPlantLocations() {
     try {
         // Use the correct port (3000) for your backend
         const response = await fetch(fetchLocationsURL);
+	if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
         const locations = await response.json();
         console.log("Fetched plant locations:", locations);  // Debugging: log the locations
         allLocations = locations;  // Store the fetched locations
@@ -454,6 +457,7 @@ async function fetchPlantLocations() {
                 `;
                 locationDetails.innerHTML += details;
             });
+    	addMarkers(allLocations);
     } catch (error) {
         console.error("Error fetching plant locations:", error);
     }
